@@ -1,14 +1,18 @@
-// server.js
 require('dotenv').config();
 const express = require('express');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 const cors = require('cors');
+const axios = require('axios');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: [
+    'https://localhost:7700',
+    'https://roy9957.github.io/NEON'
+  ]
+}));
 app.use(express.json());
 
 // Constants
@@ -42,16 +46,9 @@ const CODE_KEYWORDS = [
   "ফ্রন্টএন্ড", "ডাটাবেস", "কোয়েরি", "এপিআই", "ফ্রেমওয়ার্ক", "লাইব্রেরি"
 ];
 
-// Helper functions
 function containsBengali(text) {
   return /[\u0980-\u09FF]/.test(text);
 }
-
-// Initialize Gemini AI
-const genAI = new GoogleGenerativeAI(process.env.NEON_API);
-const model = genAI.getGenerativeModel({
-  model: process.env.NEON_MODEL || "gemini-1.5-flash-latest"
-});
 
 // Routes
 app.get('/', (req, res) => {
@@ -69,51 +66,47 @@ app.get('/', (req, res) => {
 app.post('/chat', async (req, res) => {
   try {
     const { message } = req.body;
-    
+
     if (!message || typeof message !== 'string') {
       return res.status(400).json({ error: 'Invalid message format' });
     }
-    
-    // Check for code-related keywords
+
     const isCodeRequest = CODE_KEYWORDS.some(keyword =>
       message.toLowerCase().includes(keyword.toLowerCase())
     );
-    
+
     if (isCodeRequest) {
       const response = containsBengali(message) ?
         "আমি দুঃখিত, আমি কোড জেনারেট বা আলোচনা করতে পারব না।" :
         "I'm sorry, I can't generate or discuss programming code.";
-      
       return res.json({ response });
     }
-    
-    // Generate content with safety settings
-    const generationConfig = {
-      temperature: 0.9,
-      topP: 1,
-      topK: 1,
-      maxOutputTokens: 2048,
-    };
-    
-    const safetySettings = [
-      { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
-      { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
-      { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' },
-      { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' }
-    ];
-    
-    const result = await model.generateContent({
+
+    // Gemini API Call (Direct URL)
+    const apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent";
+    const apiKey = process.env.NEON_API;
+
+    const response = await axios.post(`${apiUrl}?key=${apiKey}`, {
       contents: [{ parts: [{ text: message }] }],
-      generationConfig,
-      safetySettings
+      generationConfig: {
+        temperature: 0.9,
+        topP: 1,
+        topK: 1,
+        maxOutputTokens: 2048
+      },
+      safetySettings: [
+        { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
+        { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
+        { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' },
+        { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' }
+      ]
     });
-    
-    const response = await result.response;
-    const text = response.text();
-    
+
+    const text = response.data.candidates?.[0]?.content?.parts?.[0]?.text || "Sorry, I couldn't generate a proper response.";
     return res.json({ response: text });
+
   } catch (error) {
-    console.error('Error processing chat:', error);
+    console.error('Error processing chat:', error.message);
     return res.status(500).json({
       error: 'Internal server error',
       details: error.message
@@ -132,18 +125,17 @@ app.post('/identity', (req, res) => {
     const lowerMessage = message.toLowerCase();
     let response = null;
     
-    // Check identity responses
     for (const [question, answer] of Object.entries(IDENTITY_RESPONSES)) {
       if (lowerMessage.includes(question)) {
         response = answer;
         break;
       }
     }
-    
+
     if (response) {
       return res.json({ response });
     }
-    
+
     return res.status(404).json({ error: 'Not an identity question' });
   } catch (error) {
     console.error('Error checking identity:', error);
