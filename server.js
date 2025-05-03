@@ -46,13 +46,12 @@ function containsBengali(text) {
   return /[\u0980-\u09FF]/.test(text);
 }
 
-// Initialize Gemini AI with correct configuration
-const genAI = new GoogleGenerativeAI(process.env.NEON_API);
+// Initialize Gemini AI with explicit endpoint configuration
+const genAI = new GoogleGenerativeAI(process.env.NEON_API, {
+  apiEndpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
+});
+
 const model = genAI.getGenerativeModel({
-  model: "gemini-1.5-flash-latest",
-  // Required configuration for the latest model
-  apiVersion: "v1beta",
-  // Enhanced generation configuration
   generationConfig: {
     temperature: 0.9,
     topP: 1,
@@ -67,7 +66,7 @@ app.get('/', (req, res) => {
   res.json({
     service: 'NEON AI Server',
     status: 'running',
-    version: '1.0.1',
+    version: '1.0.0',
     model: 'gemini-1.5-flash-latest',
     endpoints: {
       '/chat': 'POST - Process chat messages',
@@ -97,14 +96,14 @@ app.post('/chat', async (req, res) => {
       return res.json({ response });
     }
 
-    // Check identity responses first
+    // Check identity responses
     for (const [question, answer] of Object.entries(IDENTITY_RESPONSES)) {
       if (lowerMessage.includes(question)) {
         return res.json({ response: answer });
       }
     }
 
-    // Enhanced safety settings
+    // Generate content with safety settings
     const safetySettings = [
       { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
       { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
@@ -112,7 +111,6 @@ app.post('/chat', async (req, res) => {
       { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' }
     ];
 
-    // Start a chat session for better context
     const chatSession = model.startChat({
       history: [{
         role: "user",
@@ -121,10 +119,6 @@ app.post('/chat', async (req, res) => {
         role: "model",
         parts: [{ text: "Understood! I'm NEON, your futuristic AI assistant. I'll respond in a stylish, concise manner in English or Bengali as needed." }]
       }],
-      generationConfig: {
-        temperature: 0.9,
-        maxOutputTokens: 2048
-      },
       safetySettings
     });
 
@@ -134,21 +128,23 @@ app.post('/chat', async (req, res) => {
 
     return res.json({ response: text });
   } catch (error) {
-    console.error('Detailed error:', {
+    console.error('Chat Error:', {
+      timestamp: new Date().toISOString(),
       error: error.message,
-      model: 'gemini-1.5-flash-latest',
-      timestamp: new Date().toISOString()
+      stack: error.stack,
+      model: 'gemini-1.5-flash-latest'
     });
 
-    // Enhanced error handling
+    // Special handling for model not found errors
     if (error.message.includes('404 Not Found')) {
-      return res.status(404).json({ 
-        error: 'Model not available',
-        solution: 'Please check your model name or try gemini-1.5-flash instead'
+      return res.status(404).json({
+        error: 'Model endpoint not found',
+        solution: 'Please verify the model name or try gemini-1.5-flash instead',
+        attempted_endpoint: 'gemini-1.5-flash-latest'
       });
     }
 
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'Internal server error',
       details: error.message,
       model: 'gemini-1.5-flash-latest'
@@ -167,6 +163,7 @@ app.post('/identity', (req, res) => {
     const lowerMessage = message.toLowerCase();
     let response = null;
 
+    // Check identity responses
     for (const [question, answer] of Object.entries(IDENTITY_RESPONSES)) {
       if (lowerMessage.includes(question)) {
         response = answer;
@@ -180,7 +177,7 @@ app.post('/identity', (req, res) => {
 
     return res.status(404).json({ error: 'Not an identity question' });
   } catch (error) {
-    console.error('Identity check error:', error);
+    console.error('Identity Check Error:', error);
     return res.status(500).json({ 
       error: 'Internal server error',
       details: error.message 
@@ -191,5 +188,6 @@ app.post('/identity', (req, res) => {
 // Start server
 app.listen(PORT, () => {
   console.log(`NEON AI Server running on port ${PORT}`);
-  console.log(`Using model: gemini-1.5-flash-latest`);
+  console.log(`Using model endpoint: gemini-1.5-flash-latest`);
+  console.log(`NEON API key: ${process.env.NEON_API ? '***' + process.env.NEON_API.slice(-4) : 'MISSING'}`);
 });
