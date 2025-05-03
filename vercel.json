@@ -8,23 +8,8 @@
   ],
   "routes": [
     {
-      "src": "/",
-      "dest": "/server.js",
-      "methods": ["GET"]
-    },
-    {
-      "src": "/chat",
-      "dest": "/server.js",
-      "methods": ["POST"]
-    },
-    {
-      "src": "/identity",
-      "dest": "/server.js",
-      "methods": ["POST"]
+      "src": "/(.*)",
+      "dest": "server.js"
     }
-  ],
-  "env": {
-    "NEON_API": "@neon_api_key",
-    "NEON_MODEL": "gemini-1.5-flash-latest"
-  }
+  ]
 }
