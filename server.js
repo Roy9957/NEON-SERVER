@@ -1,3 +1,12 @@
+// Error handling at the very top
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled Rejection:', err);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+});
+
 require('dotenv').config();
 const express = require('express');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
@@ -6,9 +15,17 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Enhanced CORS configuration
+const corsOptions = {
+  origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+};
+
 // Middleware
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Constants
 const IDENTITY_RESPONSES = {
@@ -46,13 +63,12 @@ function containsBengali(text) {
   return /[\u0980-\u09FF]/.test(text);
 }
 
-// Initialize Gemini AI with FULL MODEL URL
+// Initialize Gemini AI with explicit configuration
 const genAI = new GoogleGenerativeAI(process.env.NEON_API, {
   apiEndpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
 });
 
 const model = genAI.getGenerativeModel({
-  // No model name needed - using full endpoint URL above
   generationConfig: {
     temperature: 0.9,
     topP: 1,
@@ -62,7 +78,16 @@ const model = genAI.getGenerativeModel({
   }
 });
 
-// Routes
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    model: 'gemini-1.5-flash-latest'
+  });
+});
+
+// Root endpoint
 app.get('/', (req, res) => {
   res.json({
     service: 'NEON AI Server',
@@ -71,17 +96,21 @@ app.get('/', (req, res) => {
     model_endpoint: 'gemini-1.5-flash-latest',
     endpoints: {
       '/chat': 'POST - Process chat messages',
-      '/identity': 'POST - Check identity questions'
+      '/health': 'GET - Server health check'
     }
   });
 });
 
+// Chat endpoint
 app.post('/chat', async (req, res) => {
   try {
     const { message } = req.body;
     
     if (!message || typeof message !== 'string') {
-      return res.status(400).json({ error: 'Invalid message format' });
+      return res.status(400).json({ 
+        error: 'Invalid message format',
+        details: 'Message must be a non-empty string'
+      });
     }
 
     // Check for code-related keywords
@@ -120,7 +149,13 @@ app.post('/chat', async (req, res) => {
     const response = await result.response;
     const text = response.text();
 
-    return res.json({ response: text });
+    return res.json({ 
+      response: text,
+      metadata: {
+        model: 'gemini-1.5-flash-latest',
+        timestamp: new Date().toISOString()
+      }
+    });
   } catch (error) {
     console.error('API Request Failed:', {
       timestamp: new Date().toISOString(),
@@ -128,6 +163,14 @@ app.post('/chat', async (req, res) => {
       error: error.message,
       stack: error.stack
     });
+
+    // Special handling for rate limits
+    if (error.message.includes('quota') || error.message.includes('429')) {
+      return res.status(429).json({
+        error: 'Rate limit exceeded',
+        solution: 'Please try again later or check your API quota'
+      });
+    }
 
     return res.status(500).json({
       error: 'Failed to process request',
@@ -137,8 +180,45 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// Start server
-app.listen(PORT, () => {
+// 404 Handler
+app.use((req, res) => {
+  res.status(404).json({
+    error: 'Endpoint not found',
+    available_endpoints: {
+      GET: ['/', '/health'],
+      POST: ['/chat']
+    }
+  });
+});
+
+// Error handler
+app.use((err, req, res, next) => {
+  console.error('Server Error:', err);
+  res.status(500).json({
+    error: 'Internal server error',
+    details: process.env.NODE_ENV === 'development' ? err.message : 'Contact support'
+  });
+});
+
+// Start server with graceful shutdown
+const server = app.listen(PORT, () => {
   console.log(`NEON AI Server running on port ${PORT}`);
-  console.log(`Using Gemini endpoint: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent`);
+  console.log(`Using Gemini endpoint: ${genAI.apiEndpoint}`);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received. Shutting down gracefully');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received. Shutting down');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
 });
