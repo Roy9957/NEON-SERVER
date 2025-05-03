@@ -1,12 +1,4 @@
-// Error handling at the very top
-process.on('unhandledRejection', (err) => {
-  console.error('Unhandled Rejection:', err);
-});
-
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
-});
-
+// server.js
 require('dotenv').config();
 const express = require('express');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
@@ -15,17 +7,9 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Enhanced CORS configuration
-const corsOptions = {
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-};
-
 // Middleware
-app.use(cors(corsOptions));
+app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
 // Constants
 const IDENTITY_RESPONSES = {
@@ -63,162 +47,111 @@ function containsBengali(text) {
   return /[\u0980-\u09FF]/.test(text);
 }
 
-// Initialize Gemini AI with explicit configuration
-const genAI = new GoogleGenerativeAI(process.env.NEON_API, {
-  apiEndpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
-});
-
+// Initialize Gemini AI
+const genAI = new GoogleGenerativeAI(process.env.NEON_API);
 const model = genAI.getGenerativeModel({
-  generationConfig: {
-    temperature: 0.9,
-    topP: 1,
-    topK: 32,
-    maxOutputTokens: 2048,
-    responseMimeType: "text/plain"
-  }
+  model: process.env.NEON_MODEL || "gemini-1.5-flash-latest"
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    model: 'gemini-1.5-flash-latest'
-  });
-});
-
-// Root endpoint
+// Routes
 app.get('/', (req, res) => {
   res.json({
     service: 'NEON AI Server',
     status: 'running',
     version: '1.0.0',
-    model_endpoint: 'gemini-1.5-flash-latest',
     endpoints: {
       '/chat': 'POST - Process chat messages',
-      '/health': 'GET - Server health check'
+      '/identity': 'POST - Check identity questions'
     }
   });
 });
 
-// Chat endpoint
 app.post('/chat', async (req, res) => {
   try {
     const { message } = req.body;
     
     if (!message || typeof message !== 'string') {
-      return res.status(400).json({ 
-        error: 'Invalid message format',
-        details: 'Message must be a non-empty string'
-      });
+      return res.status(400).json({ error: 'Invalid message format' });
     }
-
+    
     // Check for code-related keywords
-    const lowerMessage = message.toLowerCase();
-    const isCodeRequest = CODE_KEYWORDS.some(keyword => 
-      lowerMessage.includes(keyword.toLowerCase())
+    const isCodeRequest = CODE_KEYWORDS.some(keyword =>
+      message.toLowerCase().includes(keyword.toLowerCase())
     );
-
+    
     if (isCodeRequest) {
-      const response = containsBengali(message)
-        ? "আমি দুঃখিত, আমি কোড জেনারেট বা আলোচনা করতে পারব না।"
-        : "I'm sorry, I can't generate or discuss programming code.";
+      const response = containsBengali(message) ?
+        "আমি দুঃখিত, আমি কোড জেনারেট বা আলোচনা করতে পারব না।" :
+        "I'm sorry, I can't generate or discuss programming code.";
+      
       return res.json({ response });
     }
-
-    // Check identity responses
-    for (const [question, answer] of Object.entries(IDENTITY_RESPONSES)) {
-      if (lowerMessage.includes(question)) {
-        return res.json({ response: answer });
-      }
-    }
-
+    
     // Generate content with safety settings
+    const generationConfig = {
+      temperature: 0.9,
+      topP: 1,
+      topK: 1,
+      maxOutputTokens: 2048,
+    };
+    
     const safetySettings = [
       { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
       { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
       { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' },
       { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' }
     ];
-
+    
     const result = await model.generateContent({
       contents: [{ parts: [{ text: message }] }],
+      generationConfig,
       safetySettings
     });
-
+    
     const response = await result.response;
     const text = response.text();
-
-    return res.json({ 
-      response: text,
-      metadata: {
-        model: 'gemini-1.5-flash-latest',
-        timestamp: new Date().toISOString()
-      }
-    });
+    
+    return res.json({ response: text });
   } catch (error) {
-    console.error('API Request Failed:', {
-      timestamp: new Date().toISOString(),
-      endpoint: 'gemini-1.5-flash-latest',
-      error: error.message,
-      stack: error.stack
-    });
-
-    // Special handling for rate limits
-    if (error.message.includes('quota') || error.message.includes('429')) {
-      return res.status(429).json({
-        error: 'Rate limit exceeded',
-        solution: 'Please try again later or check your API quota'
-      });
-    }
-
+    console.error('Error processing chat:', error);
     return res.status(500).json({
-      error: 'Failed to process request',
-      details: error.message,
-      attempted_endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent'
+      error: 'Internal server error',
+      details: error.message
     });
   }
 });
 
-// 404 Handler
-app.use((req, res) => {
-  res.status(404).json({
-    error: 'Endpoint not found',
-    available_endpoints: {
-      GET: ['/', '/health'],
-      POST: ['/chat']
+app.post('/identity', (req, res) => {
+  try {
+    const { message } = req.body;
+    
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({ error: 'Invalid message format' });
     }
-  });
+    
+    const lowerMessage = message.toLowerCase();
+    let response = null;
+    
+    // Check identity responses
+    for (const [question, answer] of Object.entries(IDENTITY_RESPONSES)) {
+      if (lowerMessage.includes(question)) {
+        response = answer;
+        break;
+      }
+    }
+    
+    if (response) {
+      return res.json({ response });
+    }
+    
+    return res.status(404).json({ error: 'Not an identity question' });
+  } catch (error) {
+    console.error('Error checking identity:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
-// Error handler
-app.use((err, req, res, next) => {
-  console.error('Server Error:', err);
-  res.status(500).json({
-    error: 'Internal server error',
-    details: process.env.NODE_ENV === 'development' ? err.message : 'Contact support'
-  });
-});
-
-// Start server with graceful shutdown
-const server = app.listen(PORT, () => {
+// Start server
+app.listen(PORT, () => {
   console.log(`NEON AI Server running on port ${PORT}`);
-  console.log(`Using Gemini endpoint: ${genAI.apiEndpoint}`);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received. Shutting down gracefully');
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('SIGINT received. Shutting down');
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
-  });
 });
