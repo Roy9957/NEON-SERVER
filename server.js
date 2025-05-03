@@ -46,12 +46,13 @@ function containsBengali(text) {
   return /[\u0980-\u09FF]/.test(text);
 }
 
-// Initialize Gemini AI with explicit endpoint configuration
+// Initialize Gemini AI with FULL MODEL URL
 const genAI = new GoogleGenerativeAI(process.env.NEON_API, {
   apiEndpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
 });
 
 const model = genAI.getGenerativeModel({
+  // No model name needed - using full endpoint URL above
   generationConfig: {
     temperature: 0.9,
     topP: 1,
@@ -67,7 +68,7 @@ app.get('/', (req, res) => {
     service: 'NEON AI Server',
     status: 'running',
     version: '1.0.0',
-    model: 'gemini-1.5-flash-latest',
+    model_endpoint: 'gemini-1.5-flash-latest',
     endpoints: {
       '/chat': 'POST - Process chat messages',
       '/identity': 'POST - Check identity questions'
@@ -111,76 +112,27 @@ app.post('/chat', async (req, res) => {
       { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' }
     ];
 
-    const chatSession = model.startChat({
-      history: [{
-        role: "user",
-        parts: [{ text: "You are NEON, a stylish AI assistant that responds in English and Bengali. Keep responses concise and futuristic." }]
-      }, {
-        role: "model",
-        parts: [{ text: "Understood! I'm NEON, your futuristic AI assistant. I'll respond in a stylish, concise manner in English or Bengali as needed." }]
-      }],
+    const result = await model.generateContent({
+      contents: [{ parts: [{ text: message }] }],
       safetySettings
     });
 
-    const result = await chatSession.sendMessage(message);
     const response = await result.response;
     const text = response.text();
 
     return res.json({ response: text });
   } catch (error) {
-    console.error('Chat Error:', {
+    console.error('API Request Failed:', {
       timestamp: new Date().toISOString(),
+      endpoint: 'gemini-1.5-flash-latest',
       error: error.message,
-      stack: error.stack,
-      model: 'gemini-1.5-flash-latest'
+      stack: error.stack
     });
-
-    // Special handling for model not found errors
-    if (error.message.includes('404 Not Found')) {
-      return res.status(404).json({
-        error: 'Model endpoint not found',
-        solution: 'Please verify the model name or try gemini-1.5-flash instead',
-        attempted_endpoint: 'gemini-1.5-flash-latest'
-      });
-    }
 
     return res.status(500).json({
-      error: 'Internal server error',
+      error: 'Failed to process request',
       details: error.message,
-      model: 'gemini-1.5-flash-latest'
-    });
-  }
-});
-
-app.post('/identity', (req, res) => {
-  try {
-    const { message } = req.body;
-    
-    if (!message || typeof message !== 'string') {
-      return res.status(400).json({ error: 'Invalid message format' });
-    }
-
-    const lowerMessage = message.toLowerCase();
-    let response = null;
-
-    // Check identity responses
-    for (const [question, answer] of Object.entries(IDENTITY_RESPONSES)) {
-      if (lowerMessage.includes(question)) {
-        response = answer;
-        break;
-      }
-    }
-
-    if (response) {
-      return res.json({ response });
-    }
-
-    return res.status(404).json({ error: 'Not an identity question' });
-  } catch (error) {
-    console.error('Identity Check Error:', error);
-    return res.status(500).json({ 
-      error: 'Internal server error',
-      details: error.message 
+      attempted_endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent'
     });
   }
 });
@@ -188,6 +140,5 @@ app.post('/identity', (req, res) => {
 // Start server
 app.listen(PORT, () => {
   console.log(`NEON AI Server running on port ${PORT}`);
-  console.log(`Using model endpoint: gemini-1.5-flash-latest`);
-  console.log(`NEON API key: ${process.env.NEON_API ? '***' + process.env.NEON_API.slice(-4) : 'MISSING'}`);
+  console.log(`Using Gemini endpoint: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent`);
 });
