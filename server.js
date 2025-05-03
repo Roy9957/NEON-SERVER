@@ -1,4 +1,3 @@
-// server.js
 require('dotenv').config();
 const express = require('express');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
@@ -47,10 +46,20 @@ function containsBengali(text) {
   return /[\u0980-\u09FF]/.test(text);
 }
 
-// Initialize Gemini AI
+// Initialize Gemini AI with correct configuration
 const genAI = new GoogleGenerativeAI(process.env.NEON_API);
 const model = genAI.getGenerativeModel({
-  model: process.env.NEON_MODEL || "gemini-1.5-flash-latest"
+  model: "gemini-1.5-flash-latest",
+  // Required configuration for the latest model
+  apiVersion: "v1beta",
+  // Enhanced generation configuration
+  generationConfig: {
+    temperature: 0.9,
+    topP: 1,
+    topK: 32,
+    maxOutputTokens: 2048,
+    responseMimeType: "text/plain"
+  }
 });
 
 // Routes
@@ -58,7 +67,8 @@ app.get('/', (req, res) => {
   res.json({
     service: 'NEON AI Server',
     status: 'running',
-    version: '1.0.0',
+    version: '1.0.1',
+    model: 'gemini-1.5-flash-latest',
     endpoints: {
       '/chat': 'POST - Process chat messages',
       '/identity': 'POST - Check identity questions'
@@ -75,26 +85,26 @@ app.post('/chat', async (req, res) => {
     }
 
     // Check for code-related keywords
+    const lowerMessage = message.toLowerCase();
     const isCodeRequest = CODE_KEYWORDS.some(keyword => 
-      message.toLowerCase().includes(keyword.toLowerCase())
+      lowerMessage.includes(keyword.toLowerCase())
     );
 
     if (isCodeRequest) {
       const response = containsBengali(message)
         ? "আমি দুঃখিত, আমি কোড জেনারেট বা আলোচনা করতে পারব না।"
         : "I'm sorry, I can't generate or discuss programming code.";
-      
       return res.json({ response });
     }
 
-    // Generate content with safety settings
-    const generationConfig = {
-      temperature: 0.9,
-      topP: 1,
-      topK: 1,
-      maxOutputTokens: 2048,
-    };
+    // Check identity responses first
+    for (const [question, answer] of Object.entries(IDENTITY_RESPONSES)) {
+      if (lowerMessage.includes(question)) {
+        return res.json({ response: answer });
+      }
+    }
 
+    // Enhanced safety settings
     const safetySettings = [
       { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
       { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
@@ -102,21 +112,46 @@ app.post('/chat', async (req, res) => {
       { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' }
     ];
 
-    const result = await model.generateContent({
-      contents: [{ parts: [{ text: message }] }],
-      generationConfig,
+    // Start a chat session for better context
+    const chatSession = model.startChat({
+      history: [{
+        role: "user",
+        parts: [{ text: "You are NEON, a stylish AI assistant that responds in English and Bengali. Keep responses concise and futuristic." }]
+      }, {
+        role: "model",
+        parts: [{ text: "Understood! I'm NEON, your futuristic AI assistant. I'll respond in a stylish, concise manner in English or Bengali as needed." }]
+      }],
+      generationConfig: {
+        temperature: 0.9,
+        maxOutputTokens: 2048
+      },
       safetySettings
     });
 
+    const result = await chatSession.sendMessage(message);
     const response = await result.response;
     const text = response.text();
 
     return res.json({ response: text });
   } catch (error) {
-    console.error('Error processing chat:', error);
+    console.error('Detailed error:', {
+      error: error.message,
+      model: 'gemini-1.5-flash-latest',
+      timestamp: new Date().toISOString()
+    });
+
+    // Enhanced error handling
+    if (error.message.includes('404 Not Found')) {
+      return res.status(404).json({ 
+        error: 'Model not available',
+        solution: 'Please check your model name or try gemini-1.5-flash instead'
+      });
+    }
+
     return res.status(500).json({ 
       error: 'Internal server error',
-      details: error.message 
+      details: error.message,
+      model: 'gemini-1.5-flash-latest'
     });
   }
 });
@@ -132,7 +167,6 @@ app.post('/identity', (req, res) => {
     const lowerMessage = message.toLowerCase();
     let response = null;
 
-    // Check identity responses
     for (const [question, answer] of Object.entries(IDENTITY_RESPONSES)) {
       if (lowerMessage.includes(question)) {
         response = answer;
@@ -146,12 +180,16 @@ app.post('/identity', (req, res) => {
 
     return res.status(404).json({ error: 'Not an identity question' });
   } catch (error) {
-    console.error('Error checking identity:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    console.error('Identity check error:', error);
+    return res.status(500).json({ 
+      error: 'Internal server error',
+      details: error.message 
+    });
   }
 });
 
 // Start server
 app.listen(PORT, () => {
   console.log(`NEON AI Server running on port ${PORT}`);
+  console.log(`Using model: gemini-1.5-flash-latest`);
 });
